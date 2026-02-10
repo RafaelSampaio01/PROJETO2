@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <title>ESP32 BLE Simple</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #f0f0f0;
+        }
+        
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        
+        h1 {
+            color: #333;
+            text-align: center;
+        }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        .disconnected {
+            background: #ffcccc;
+            color: #990000;
+        }
+        
+        .connected {
+            background: #ccffcc;
+            color: #009900;
+        }
+        
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        
+        .connect-btn {
+            background: #4CAF50;
+            color: white;
+        }
+        
+        .disconnect-btn {
+            background: #f44336;
+            color: white;
+        }
+        
+        .command-btn {
+            background: #2196F3;
+            color: white;
+            width: 100px;
+        }
+        
+        #log {
+            height: 300px;
+            overflow-y: auto;
+            border: 1px solid #ddd;
+            padding: 10px;
+            margin: 10px 0;
+            font-family: monospace;
+            background: #fafafa;
+        }
+        
+        .log-line {
+            margin: 5px 0;
+            padding: 3px;
+        }
+        
+        .sent {
+            color: #0066cc;
+        }
+        
+        .received {
+            color: #009900;
+        }
+        
+        .error {
+            color: #cc0000;
+        }
+        
+        .input-area {
+            display: flex;
+            margin-top: 10px;
+        }
+        
+        #input {
+            flex: 1;
+            padding: 10px;
+            font-size: 16px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        
+        #send {
+            padding: 10px 20px;
+            background: #2196F3;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            margin-left: 10px;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔵 ESP32 BLE Simple</h1>
+        
+        <div id="status" class="status disconnected">
+            Status: Desconectado
+        </div>
+        
+        <div>
+            <button id="connect" class="connect-btn">Conectar</button>
+            <button id="disconnect" class="disconnect-btn" disabled>Desconectar</button>
+        </div>
+        
+        <div>
+            <h3>Comandos Rápidos:</h3>
+            <button id="ping" class="command-btn" disabled>Ping</button>
+            <button id="tempo" class="command-btn" disabled>Tempo</button>
+            <button id="ledon" class="command-btn" disabled>LED On</button>
+            <button id="ledoff" class="command-btn" disabled>LED Off</button>
+            <button id="clear" class="command-btn">Limpar</button>
+        </div>
+        
+        <div id="log"></div>
+        
+        <div class="input-area">
+            <input type="text" id="input" placeholder="Digite uma mensagem..." disabled>
+            <button id="send" disabled>Enviar</button>
+        </div>
+    </div>
+
+    <script>
+        // UUIDs simples (16-bit)
+        const SERVICE_UUID = 0xFFF0;
+        const TX_CHAR_UUID = 0xFFF1;
+        const RX_CHAR_UUID = 0xFFF2;
+        
+        // Estado
+        let device = null;
+        let txCharacteristic = null;
+        let rxCharacteristic = null;
+        let connected = false;
+        
+        // Elementos
+        const statusEl = document.getElementById('status');
+        const logEl = document.getElementById('log');
+        const inputEl = document.getElementById('input');
+        const connectBtn = document.getElementById('connect');
+        const disconnectBtn = document.getElementById('disconnect');
+        const sendBtn = document.getElementById('send');
+        
+        // Funções auxiliares
+        function log(message, type = 'info') {
+            const div = document.createElement('div');
+            div.className = `log-line ${type}`;
+            div.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logEl.appendChild(div);
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        
+        function updateUI() {
+            if (connected) {
+                statusEl.textContent = 'Status: Conectado';
+                statusEl.className = 'status connected';
+                connectBtn.disabled = true;
+                disconnectBtn.disabled = false;
+                inputEl.disabled = false;
+                sendBtn.disabled = false;
+                
+                // Habilitar botões de comando
+                document.querySelectorAll('.command-btn').forEach(btn => {
+                    if (btn.id !== 'clear') btn.disabled = false;
+                });
+                
+                inputEl.focus();
+            } else {
+                statusEl.textContent = 'Status: Desconectado';
+                statusEl.className = 'status disconnected';
+                connectBtn.disabled = false;
+                disconnectBtn.disabled = true;
+                inputEl.disabled = true;
+                sendBtn.disabled = true;
+                
+                // Desabilitar botões de comando
+                document.querySelectorAll('.command-btn').forEach(btn => {
+                    if (btn.id !== 'clear') btn.disabled = true;
+                });
+            }
+        }
+        
+        // Conectar ao ESP32
+        async function connect() {
+            try {
+                log('🔍 Procurando ESP32...', 'info');
+                
+                // Solicitar dispositivo
+                device = await navigator.bluetooth.requestDevice({
+                    filters: [{ name: 'ESP32-SIMPLE' }],
+                    optionalServices: [SERVICE_UUID]
+                });
+                
+                log(`📱 Dispositivo: ${device.name}`, 'info');
+                
+                // Conectar ao servidor GATT
+                const server = await device.gatt.connect();
+                
+                // Obter serviço
+                const service = await server.getPrimaryService(SERVICE_UUID);
+                
+                // Obter características
+                txCharacteristic = await service.getCharacteristic(TX_CHAR_UUID);
+                rxCharacteristic = await service.getCharacteristic(RX_CHAR_UUID);
+                
+                // Configurar notificações
+                await txCharacteristic.startNotifications();
+                txCharacteristic.addEventListener('characteristicvaluechanged', event => {
+                    const value = new TextDecoder().decode(event.target.value).trim();
+                    if (value) {
+                        log(`← ${value}`, 'received');
+                    }
+                });
+                
+                // Configurar desconexão
+                device.addEventListener('gattserverdisconnected', disconnect);
+                
+                connected = true;
+                log('✅ Conectado com sucesso!', 'info');
+                log('Digite comandos ou use os botões', 'info');
+                
+            } catch (error) {
+                log(`❌ Erro: ${error.message}`, 'error');
+                disconnect();
+            }
+            
+            updateUI();
+        }
+        
+        // Desconectar
+        function disconnect() {
+            if (device && device.gatt.connected) {
+                device.gatt.disconnect();
+            }
+            
+            connected = false;
+            device = null;
+            txCharacteristic = null;
+            rxCharacteristic = null;
+            
+            log('📴 Desconectado', 'info');
+            updateUI();
+        }
+        
+        // Enviar comando
+        async function sendCommand(command) {
+            if (!connected || !rxCharacteristic) {
+                log('⚠️ Não conectado', 'error');
+                return;
+            }
+            
+            try {
+                log(`→ ${command}`, 'sent');
+                await rxCharacteristic.writeValue(new TextEncoder().encode(command + '\n'));
+            } catch (error) {
+                log(`❌ Erro ao enviar: ${error.message}`, 'error');
+                disconnect();
+            }
+        }
+        
+        // Event Listeners
+        connectBtn.addEventListener('click', connect);
+        disconnectBtn.addEventListener('click', disconnect);
+        
+        sendBtn.addEventListener('click', () => {
+            const command = inputEl.value.trim();
+            if (command) {
+                sendCommand(command);
+                inputEl.value = '';
+            }
+        });
+        
+        inputEl.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                const command = inputEl.value.trim();
+                if (command) {
+                    sendCommand(command);
+                    inputEl.value = '';
+                }
+            }
+        });
+        
+        // Botões de comando rápido
+        document.getElementById('ping').addEventListener('click', () => sendCommand('ping'));
+        document.getElementById('tempo').addEventListener('click', () => sendCommand('tempo'));
+        document.getElementById('ledon').addEventListener('click', () => sendCommand('led on'));
+        document.getElementById('ledoff').addEventListener('click', () => sendCommand('led off'));
+        document.getElementById('clear').addEventListener('click', () => {
+            logEl.innerHTML = '';
+            log('Log limpo', 'info');
+        });
+        
+        // Inicializar
+        log('ESP32 BLE Simple Web Interface', 'info');
+        log('Clique em "Conectar" para começar', 'info');
+        updateUI();
+    </script>
+</body>
+</html>
